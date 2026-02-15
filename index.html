@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>EVN PPE Monitor v2.24</title>
+    <title>EVN PPE AI v2.25</title>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
         #container { position: relative; width: 100vw; height: 100vh; }
         video { width: 100%; height: 100%; object-fit: cover; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 5; }
-        .status-overlay { position: absolute; top: 15px; width: 100%; z-index: 10; text-align: center; }
-        #status-label { background: rgba(0, 255, 0, 0.2); color: #0f0; padding: 6px 18px; border-radius: 20px; border: 1.5px solid #0f0; font-weight: bold; font-size: 13px; }
+        .ui { position: absolute; top: 15px; width: 100%; z-index: 10; text-align: center; }
+        #status { background: rgba(0, 255, 0, 0.2); color: #0f0; padding: 6px 15px; border-radius: 20px; border: 1px solid #0f0; font-size: 13px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -19,21 +19,22 @@
 <div id="container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
-    <div class="status-overlay"><span id="status-label">🔄 ĐANG KHỞI TẠO AI...</span></div>
+    <div class="ui"><span id="status">🔄 ĐANG TẢI MÔ HÌNH 10-COL...</span></div>
 </div>
 
 <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    const statusLabel = document.getElementById('status-label');
-    
-    // THỨ TỰ CLASS PPE CỦA BẠN (Sửa lại cho đúng với file .pt)
-    const labels = ["Nón bảo hộ", "Áo phản quang", "Giày bảo hộ"]; 
+    const status = document.getElementById('status');
+
+    // Dựa trên output (1, 10, 8400), bạn có chính xác 6 CLASS. 
+    // Hãy sửa tên dưới đây cho đúng thứ tự trong file data.yaml của bạn.
+    const labels = ["Nón", "Áo phản quang", "Giày", "Găng tay", "Kính", "Người"]; 
 
     let session;
 
-    async function start() {
+    async function init() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: "environment", width: 640, height: 640 }
@@ -43,101 +44,86 @@
 
             // Nạp mô hình ONNX
             session = await ort.InferenceSession.create('./best.onnx', { executionProviders: ['wasm'] });
-            statusLabel.innerText = "🟢 AI ĐANG QUÉT TRỰC TIẾP";
-            processVideo();
+            status.innerText = "🟢 AI ĐANG QUÉT (HỆ 6 LỚP)";
+            render();
         } catch (e) {
-            statusLabel.innerText = "❌ LỖI: " + e.message;
+            status.innerText = "❌ Lỗi: " + e.message;
         }
     }
 
-    async function processVideo() {
+    async function render() {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         try {
-            // 1. Tiền xử lý Tensor
-            const input = await prepareTensor(canvas);
-            
-            // 2. Chạy Inference
-            const outputs = await session.run({ images: input });
-            const rawData = outputs[Object.keys(outputs)[0]].data;
+            const input = await getTensor();
+            const result = await session.run({ images: input });
+            const output = result[Object.keys(result)[0]].data;
 
-            // 3. Giải mã và vẽ khung thực tế (Bỏ khung xanh đứng yên cũ)
-            decodeYOLOv8(rawData);
-        } catch (err) {
-            console.error(err);
-        }
+            // Giải mã chuẩn xác cho shape (1, 10, 8400)
+            decode(output);
+        } catch (err) { console.log(err); }
 
-        requestAnimationFrame(processVideo);
+        requestAnimationFrame(render);
     }
 
-    async function prepareTensor(source) {
-        const offscreen = new OffscreenCanvas(640, 640);
-        const octx = offscreen.getContext('2d');
-        octx.drawImage(source, 0, 0, 640, 640);
-        const imgData = octx.getImageData(0, 0, 640, 640).data;
-
-        const floatData = new Float32Array(3 * 640 * 640);
+    async function getTensor() {
+        const off = new OffscreenCanvas(640, 640);
+        const octx = off.getContext('2d');
+        octx.drawImage(canvas, 0, 0, 640, 640);
+        const data = octx.getImageData(0, 0, 640, 640).data;
+        const float32 = new Float32Array(3 * 640 * 640);
         for (let i = 0; i < 640 * 640; i++) {
-            floatData[i] = imgData[i * 4] / 255.0;           // R
-            floatData[i + 409600] = imgData[i * 4 + 1] / 255.0; // G
-            floatData[i + 819200] = imgData[i * 4 + 2] / 255.0; // B
+            float32[i] = data[i * 4] / 255.0;
+            float32[i + 409600] = data[i * 4 + 1] / 255.0;
+            float32[i + 819200] = data[i * 4 + 2] / 255.0;
         }
-        return new ort.Tensor('float32', floatData, [1, 3, 640, 640]);
+        return new ort.Tensor('float32', float32, [1, 3, 640, 640]);
     }
 
-    function decodeYOLOv8(data) {
-        // YOLOv8 output: [1, 4 + num_classes, 8400]
-        const numClasses = labels.length;
-        const totalRows = 8400;
+    function decode(data) {
+        const numClasses = 6; // 10 (tổng) - 4 (tọa độ) = 6 classes
+        const rows = 8400;
 
-        for (let i = 0; i < totalRows; i++) {
-            let maxConfidence = 0;
-            let classIdx = -1;
+        for (let i = 0; i < rows; i++) {
+            let prob = 0;
+            let id = -1;
 
-            // Tìm class có độ tin cậy cao nhất
+            // Tìm class có xác suất cao nhất trong 6 lớp
             for (let c = 0; c < numClasses; c++) {
-                const conf = data[(4 + c) * totalRows + i];
-                if (conf > maxConfidence) {
-                    maxConfidence = conf;
-                    classIdx = c;
+                const currentProb = data[(4 + c) * rows + i];
+                if (currentProb > prob) {
+                    prob = currentProb;
+                    id = c;
                 }
             }
 
-            // Ngưỡng lọc vi phạm (tăng lên 0.45 để chính xác)
-            if (maxConfidence > 0.45) {
-                const cx = data[0 * totalRows + i];
-                const cy = data[1 * totalRows + i];
-                const w = data[2 * totalRows + i];
-                const h = data[3 * totalRows + i];
+            // Ngưỡng lọc 0.5
+            if (prob > 0.5) {
+                const xc = data[0 * rows + i];
+                const yc = data[1 * rows + i];
+                const w = data[2 * rows + i];
+                const h = data[3 * rows + i];
 
-                // Scale tọa độ về màn hình điện thoại
-                const scaleX = canvas.width / 640;
-                const scaleY = canvas.height / 640;
-                
-                const x = (cx - w / 2) * scaleX;
-                const y = (cy - h / 2) * scaleY;
-                const rectW = w * scaleX;
-                const rectH = h * scaleY;
+                const sx = canvas.width / 640;
+                const sy = canvas.height / 640;
 
-                drawDetection(x, y, rectW, rectH, labels[classIdx], maxConfidence);
+                draw( (xc - w/2)*sx, (yc - h/2)*sy, w*sx, h*sy, labels[id], prob);
             }
         }
     }
 
-    function drawDetection(x, y, w, h, label, conf) {
+    function draw(x, y, w, h, txt, sc) {
         ctx.strokeStyle = "#00ff00";
         ctx.lineWidth = 3;
         ctx.strokeRect(x, y, w, h);
-        
         ctx.fillStyle = "#00ff00";
         ctx.font = "bold 16px Arial";
-        const text = `${label} ${Math.round(conf * 100)}%`;
-        ctx.fillText(text, x, y > 20 ? y - 10 : 20);
+        ctx.fillText(`${txt} ${Math.round(sc*100)}%`, x, y > 20 ? y - 10 : 20);
     }
 
-    start();
+    init();
 </script>
 </body>
 </html>
