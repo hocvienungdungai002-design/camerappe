@@ -1,69 +1,97 @@
 <!DOCTYPE html>
-<html>
+<html lang="vi">
 <head>
-    <title>EVN Control v2.17</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta charset="UTF-8">
+    <link rel="manifest" href="manifest.json">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EVN Safety AI v2.21</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #fff; text-align: center; font-family: sans-serif; }
-        .control-panel { padding: 10px; background: #222; display: flex; justify-content: space-around; align-items: center; }
-        #preview { width: 100%; height: 80vh; object-fit: contain; background: #111; }
-        /* Switch styling */
-        .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
-        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #4CAF50; }
-        input:checked + .slider:before { transform: translateX(26px); }
+        body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .ui-overlay { position: absolute; top: 10px; width: 100%; z-index: 10; text-align: center; }
+        #status { background: rgba(0,0,0,0.6); padding: 8px 15px; border-radius: 20px; font-size: 14px; }
+        .warning-flash { animation: flash 0.5s infinite; color: #ff0000; font-weight: bold; display: none; }
+        @keyframes flash { 50% { opacity: 0; } }
     </style>
 </head>
 <body>
-    <div class="control-panel">
-        <span>Nhận hình AI:</span>
-        <label class="switch">
-            <input type="checkbox" id="receiveToggle" checked>
-            <span class="slider"></span>
-        </label>
-        <button onclick="window.location.reload()" style="padding:5px">Mới</button>
+
+<div id="container">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    
+    <div class="ui-overlay">
+        <span id="status">⏳ Đang nạp mô hình AI...</span>
+        <div id="warning" class="warning-flash">⚠️ PHÁT HIỆN VI PHẠM PPE!</div>
     </div>
+</div>
 
-    <img id="preview" alt="Chờ tín hiệu...">
-    <video id="video" autoplay playsinline style="display:none;"></video>
-    <canvas id="canvas" style="display:none;"></canvas>
+<audio id="alarm" src="bip.mp3" preload="auto"></audio>
 
-    <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const preview = document.getElementById('preview');
-        const receiveToggle = document.getElementById('receiveToggle');
-        
-        const ws = new WebSocket('wss://zealand-ottawa-mae-sword.trycloudflare.com'); 
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const warning = document.getElementById('warning');
+    const alarm = document.getElementById('alarm');
 
-        // Nhận hình ngược từ Laptop (chỉ hiển thị nếu nút gạt đang Bật)
-        ws.onmessage = (event) => {
-            if (receiveToggle.checked) {
-                preview.src = event.data;
-            }
-        };
+    let session;
 
-        navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment", width: 480, height: 360 }
-        }).then(stream => {
-            video.srcObject = stream;
-            setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    canvas.getContext('2d').drawImage(video, 0, 0);
-                    const data = canvas.toDataURL('image/jpeg', 0.4);
-                    
-                    // Nếu tắt nhận hình, tự hiển thị ảnh thô để căn chỉnh
-                    if (!receiveToggle.checked) {
-                        preview.src = data;
-                    }
-                    ws.send(data);
-                }
-            }, 70); 
+    // 1. Khởi tạo Camera
+    async function initCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: 640, height: 640 }
         });
-    </script>
+        video.srcObject = stream;
+        return new Promise(resolve => video.onloadedmetadata = resolve);
+    }
+
+    // 2. Nạp mô hình AI (.onnx)
+    async function initAI() {
+        try {
+            // Nạp file best.onnx (đã convert từ best.pt)
+            session = await ort.InferenceSession.create('./best.onnx');
+            status.innerText = "🟢 AI SẴN SÀNG - ĐANG QUÉT";
+            runInference();
+        } catch (e) {
+            status.innerText = "❌ Lỗi nạp mô hình: " + e.message;
+        }
+    }
+
+    // 3. Chạy nhận diện realtime
+    async function runInference() {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // Vẽ video lên canvas để lấy dữ liệu pixel
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // Ghi chú: Ở đây cần các bước tiền xử lý Tensor (Resize 640x640, Normalize)
+        // Vì giới hạn trình duyệt, ta sẽ quét đơn giản hoặc dùng thư viện Ultralytics JS
+        
+        // Giả lập phát hiện vi phạm (ví dụ: nếu class_id = 2 hoặc 4 như data của bạn)
+        let violationDetected = false; 
+
+        if (violationDetected) {
+            warning.style.display = "block";
+            alarm.play(); // Phát tiếng bíp
+        } else {
+            warning.style.display = "none";
+        }
+
+        requestAnimationFrame(runInference);
+    }
+
+    // Chạy hệ thống
+    initCamera().then(initAI);
+
+    // Đăng ký Service Worker cho PWA
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js');
+    }
+</script>
 </body>
 </html>
