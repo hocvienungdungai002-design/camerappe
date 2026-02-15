@@ -1,146 +1,42 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>EVN Camera Stream HD - v2.14</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            color: #fff;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            height: 100vh;
-        }
-        #header {
-            width: 100%;
-            padding: 15px 0;
-            background: #222;
-            border-bottom: 2px solid #ff9800;
-            text-align: center;
-            z-index: 10;
-        }
-        #status {
-            margin: 0;
-            font-size: 14px;
-            color: #ffeb3b;
-        }
-        #video-container {
-            flex-grow: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            background: #000;
-        }
-        video {
-            width: 100%;
-            height: auto;
-            max-height: 100%;
-            object-fit: contain;
-        }
-        #controls {
-            padding: 20px;
-            width: 100%;
-            background: rgba(0,0,0,0.8);
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-        }
-        .btn {
-            padding: 12px 24px;
-            border-radius: 5px;
-            border: none;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .btn-refresh { background: #4CAF50; color: white; }
-    </style>
+    <title>EVN Client v2.15</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
-<body>
-
-    <div id="header">
-        <h3 style="margin:0 0 5px 0;">GIÁM SÁT EVN v2.14</h3>
-        <p id="status">⏳ Đang khởi tạo luồng dữ liệu...</p>
-    </div>
-
-    <div id="video-container">
-        <video id="video" autoplay playsinline muted></video>
-    </div>
-
+<body style="margin:0; background:#000; color:white; text-align:center;">
+    <h4 id="status">Đang kết nối Server...</h4>
+    <img id="result" style="width:100%; border:2px solid #00ff00;">
+    <video id="video" autoplay playsinline style="display:none;"></video>
     <canvas id="canvas" style="display:none;"></canvas>
-
-    <div id="controls">
-        <button class="btn btn-refresh" onclick="window.location.reload()">LÀM MỚI KẾT NỐI</button>
-    </div>
 
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
+        const resultImg = document.getElementById('result');
         const status = document.getElementById('status');
         
-        // QUAN TRỌNG: Thay địa chỉ Cloudflare Tunnel của bạn vào đây
-        // Phải bắt đầu bằng wss:// (không phải https://)
-        const CLOUDFLARE_URL = 'wss://zealand-ottawa-mae-sword.trycloudflare.com';
-        
-        let ws;
+        const ws = new WebSocket('wss://zealand-ottawa-mae-sword.trycloudflare.com'); 
 
-        function connectWS() {
-            ws = new WebSocket(CLOUDFLARE_URL);
+        // Nhận ảnh đã xử lý từ Laptop
+        ws.onmessage = (event) => {
+            resultImg.src = event.data;
+            status.innerText = "🟢 Đang nhận phản hồi AI từ Laptop";
+        };
 
-            ws.onopen = () => {
-                status.innerText = "🟢 ĐÃ KẾT NỐI SERVER AI (CLOUDFLARE)";
-                status.style.color = "#4CAF50";
-            };
-
-            ws.onclose = () => {
-                status.innerText = "🔴 MẤT KẾT NỐI - ĐANG THỬ LẠI...";
-                status.style.color = "#f44336";
-                setTimeout(connectWS, 2000); // Thử kết nối lại sau 2 giây
-            };
-
-            ws.onerror = (err) => {
-                console.error("Lỗi WebSocket:", err);
-            };
-        }
-
-        // Cấu hình Camera sau với độ phân giải thấp để giảm trễ
         navigator.mediaDevices.getUserMedia({
-            video: { 
-                facingMode: "environment", 
-                width: { ideal: 640 }, 
-                height: { ideal: 480 },
-                frameRate: { ideal: 15 }
-            }
+            video: { facingMode: "environment", width: 480, height: 360 } // Giảm độ phân giải để mượt hơn
         }).then(stream => {
             video.srcObject = stream;
-            
-            // Bắt đầu gửi khung hình khi video đã sẵn sàng
             setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
+                if (ws.readyState === WebSocket.OPEN) {
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(video, 0, 0);
-                    
-                    // Nén ảnh chất lượng 0.4 (40%) để truyền tải cực nhanh qua Internet
-                    const imageData = canvas.toDataURL('image/jpeg', 0.4);
-                    ws.send(imageData);
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    ws.send(canvas.toDataURL('image/jpeg', 0.3)); // Nén mạnh để tăng tốc phản hồi
                 }
-            }, 66); // Khoảng 15 khung hình mỗi giây (1000ms / 15 = 66ms)
-            
-        }).catch(err => {
-            status.innerText = "❌ LỖI CAMERA: " + err.message;
-            status.style.color = "#f44336";
+            }, 100); 
         });
-
-        // Khởi tạo kết nối ban đầu
-        connectWS();
     </script>
 </body>
 </html>
