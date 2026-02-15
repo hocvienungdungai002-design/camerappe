@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>EVN HD Stream v2.11</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="margin:0; background:#000; color:white; text-align:center; font-family:sans-serif;">
+    <div style="padding:10px; background:#222;">
+        <h4 id="status" style="margin:0;">⏳ Đang khởi tạo...</h4>
+    </div>
+    <video id="video" autoplay playsinline style="width:100%; max-height:70vh;"></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+    
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const status = document.getElementById('status');
+        
+        // ĐỊA CHỈ CLOUDFLARE CỦA BẠN
+        const ws = new WebSocket('wss://zealand-ottawa-mae-sword.trycloudflare.com'); 
+
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+        }).then(stream => {
+            video.srcObject = stream;
+            status.innerText = "📷 Camera HD đã sẵn sàng";
+            
+            setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    // Gửi ảnh nén 60% để đảm bảo tốc độ qua Internet
+                    ws.send(canvas.toDataURL('image/jpeg', 0.6));
+                }
+            }, 100); 
+        }).catch(err => {
+            status.innerText = "❌ Lỗi: " + err;
+        });
+
+        ws.onopen = () => { status.innerText = "🟢 ĐÃ KẾT NỐI SERVER AI"; status.style.color = "#00ff00"; };
+        ws.onclose = () => { status.innerText = "🔴 MẤT KẾT NỐI SERVER"; status.style.color = "#ff0000"; };
+    </script>
+</body>
+</html>
