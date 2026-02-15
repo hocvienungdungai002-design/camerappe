@@ -1,31 +1,52 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>EVN Client v2.15</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EVN Control v2.17</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <style>
+        body { margin: 0; background: #000; color: #fff; text-align: center; font-family: sans-serif; }
+        .control-panel { padding: 10px; background: #222; display: flex; justify-content: space-around; align-items: center; }
+        #preview { width: 100%; height: 80vh; object-fit: contain; background: #111; }
+        /* Switch styling */
+        .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #4CAF50; }
+        input:checked + .slider:before { transform: translateX(26px); }
+    </style>
 </head>
-<body style="margin:0; background:#000; color:white; text-align:center;">
-    <h4 id="status">Đang kết nối Server...</h4>
-    <img id="result" style="width:100%; border:2px solid #00ff00;">
+<body>
+    <div class="control-panel">
+        <span>Nhận hình AI:</span>
+        <label class="switch">
+            <input type="checkbox" id="receiveToggle" checked>
+            <span class="slider"></span>
+        </label>
+        <button onclick="window.location.reload()" style="padding:5px">Mới</button>
+    </div>
+
+    <img id="preview" alt="Chờ tín hiệu...">
     <video id="video" autoplay playsinline style="display:none;"></video>
     <canvas id="canvas" style="display:none;"></canvas>
 
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
-        const resultImg = document.getElementById('result');
-        const status = document.getElementById('status');
+        const preview = document.getElementById('preview');
+        const receiveToggle = document.getElementById('receiveToggle');
         
         const ws = new WebSocket('wss://zealand-ottawa-mae-sword.trycloudflare.com'); 
 
-        // Nhận ảnh đã xử lý từ Laptop
+        // Nhận hình ngược từ Laptop (chỉ hiển thị nếu nút gạt đang Bật)
         ws.onmessage = (event) => {
-            resultImg.src = event.data;
-            status.innerText = "🟢 Đang nhận phản hồi AI từ Laptop";
+            if (receiveToggle.checked) {
+                preview.src = event.data;
+            }
         };
 
         navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment", width: 480, height: 360 } // Giảm độ phân giải để mượt hơn
+            video: { facingMode: "environment", width: 480, height: 360 }
         }).then(stream => {
             video.srcObject = stream;
             setInterval(() => {
@@ -33,9 +54,15 @@
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     canvas.getContext('2d').drawImage(video, 0, 0);
-                    ws.send(canvas.toDataURL('image/jpeg', 0.3)); // Nén mạnh để tăng tốc phản hồi
+                    const data = canvas.toDataURL('image/jpeg', 0.4);
+                    
+                    // Nếu tắt nhận hình, tự hiển thị ảnh thô để căn chỉnh
+                    if (!receiveToggle.checked) {
+                        preview.src = data;
+                    }
+                    ws.send(data);
                 }
-            }, 100); 
+            }, 70); 
         });
     </script>
 </body>
